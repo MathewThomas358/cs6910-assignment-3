@@ -36,17 +36,18 @@ class EnteEncoder(nn.Module):
         self.num_layers = num_layers
         self.dropout = nn.Dropout(dropout)
         self.embedding = nn.Embedding(input_size, embedding_size)
+        self.bidi = bidi
 
         assert cell_type is not None, "Provide a valid cell type"
 
         if cell_type == "LSTM":
-            self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+            self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=dropout, bidirectional=bidi)
         
         elif cell_type == "GRU":
-            self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+            self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout=dropout, bidirectional=bidi)
 
         elif cell_type == "RNN":
-            self.rnn = nn.RNN(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+            self.rnn = nn.RNN(embedding_size, hidden_size, num_layers, dropout=dropout, bidirectional=bidi)
 
     def forward(self, x_trai):
 
@@ -54,10 +55,17 @@ class EnteEncoder(nn.Module):
 
         if isinstance(self.rnn, nn.LSTM):
             _, (hidden, cell) = self.rnn(embedding)
+
+            # if self.bidi:
+                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
+            # print("EEF", hidden.shape)
+
             return hidden, cell
 
         if isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
             _, hidden = self.rnn(embedding)
+            # if self.bidi:
+                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
             return hidden
 
 class EnteDecoder(nn.Module):
@@ -65,6 +73,8 @@ class EnteDecoder(nn.Module):
     def __init__(self, cell_type: str, input_size, embedding_size, hidden_size, output_size, num_layers, dropout, bidi):
 
         super(EnteDecoder, self).__init__()
+
+        self.bidi = bidi
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
@@ -78,15 +88,18 @@ class EnteDecoder(nn.Module):
         assert cell_type is not None, "Provide a valid cell type"
 
         if cell_type == "LSTM":
-            self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+            self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=dropout, bidirectional=bidi)
         
         elif cell_type == "GRU":
-            self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+            self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout=dropout, bidirectional=bidi)
 
         elif cell_type == "RNN":
-            self.rnn = nn.RNN(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+            self.rnn = nn.RNN(embedding_size, hidden_size, num_layers, dropout=dropout, bidirectional=bidi)
 
-        self.fully_conn = nn.Linear(hidden_size, output_size)
+        if self.bidi:
+            self.fully_conn = nn.Linear(2 * hidden_size, output_size)
+        else:
+            self.fully_conn = nn.Linear(hidden_size, output_size)
 
     def forward(self, x_trai, hidden, cell):
 
@@ -95,8 +108,13 @@ class EnteDecoder(nn.Module):
 
         if isinstance(self.rnn, nn.LSTM):
             output, (hidden, cell) = self.rnn(embedding, (hidden, cell))
+            # print("EDF", hidden.shape)
+            # if self.bidi:
+                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
         elif isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
             output, hidden = self.rnn(embedding, hidden)
+            # if self.bidi:
+                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
 
         predictions = self.fully_conn(output)
         predictions = torch.softmax(predictions, dim = 2)
@@ -109,12 +127,13 @@ class EnteDecoder(nn.Module):
 
 class EnteSeq2Seq(nn.Module):
 
-    def __init__(self, encoder, decoder, device):
+    def __init__(self, encoder, decoder, device, bidi: bool):
 
         super(EnteSeq2Seq, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
+        self.bidi = bidi
 
     def forward(self, source, target, tfr = 0.5):
 
@@ -129,8 +148,13 @@ class EnteSeq2Seq(nn.Module):
 
         if isinstance(self.encoder.rnn, nn.LSTM):
             hidden, cell = self.encoder(source)
+            # print("S2SF", hidden.shape)
 
         x_targ = target[0]
+
+        # if self.bidi:
+            # print(hidden.shape)
+            # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
 
         for count in range(1, target_len):
 
@@ -201,7 +225,7 @@ class EnteTransliterator:
             self.bidirectional
         )
 
-        model = EnteSeq2Seq(encoder, decoder, DEVICE).to(DEVICE)
+        model = EnteSeq2Seq(encoder, decoder, DEVICE, self.bidirectional).to(DEVICE)
 
         loss = nn.CrossEntropyLoss(ignore_index=train_data.target_chars_index[Data.pad])
         optimizer = optim.Adam(model.parameters(), lr = self.learning_rate)
@@ -244,5 +268,5 @@ class EnteTransliterator:
     def test(self):
         pass
 
-ente = EnteTransliterator(cell_type="LSTM")
-ente.train()
+# ente = EnteTransliterator(cell_type="GRU", bidirectional=True)
+# ente.train()
