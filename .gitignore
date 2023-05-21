@@ -5,3 +5,4 @@ test.py
 test.txt
 requirements.txt
 .vscode/
+wandb/

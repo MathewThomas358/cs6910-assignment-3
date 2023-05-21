@@ -8,12 +8,15 @@ import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
+
+import wandb as wb
 
 from data import Data
 
 # DEVICE = torch.device("cpu")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu") #TODO
+
+print(f'Running on {DEVICE}')
 
 DATA_DIR_PATH = r'data/mal/'
 DATA_TRAIN_PATH = r'mal_train.csv'
@@ -21,36 +24,68 @@ DATA_TEST_PATH = r'mal_test.csv'
 DATA_VALID_PATH = r'mal_valid.csv'
 
 train_data = Data(DATA_DIR_PATH + DATA_TRAIN_PATH)
+valid_data = Data(DATA_DIR_PATH + DATA_VALID_PATH)
+test_data  = Data(DATA_DIR_PATH + DATA_TEST_PATH)
 
 class EnteEncoder(nn.Module):
 
-    def __init__(self, input_size, embedding_size, hidden_size, num_layers, dropout):
+    def __init__(self, cell_type: str, input_size, embedding_size, hidden_size, num_layers, dropout, bidi):
         
         super(EnteEncoder, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.dropout = nn.Dropout(dropout)
         self.embedding = nn.Embedding(input_size, embedding_size)
-        self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=dropout)
+
+        assert cell_type is not None, "Provide a valid cell type"
+
+        if cell_type == "LSTM":
+            self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+        
+        elif cell_type == "GRU":
+            self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+
+        elif cell_type == "RNN":
+            self.rnn = nn.RNN(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
 
     def forward(self, x_trai):
-        #x will be a vector of indices
 
         embedding = self.dropout(self.embedding(x_trai))
-        _, (hidden, cell) = self.rnn(embedding)
 
-        return hidden, cell
+        if isinstance(self.rnn, nn.LSTM):
+            _, (hidden, cell) = self.rnn(embedding)
+            return hidden, cell
+
+        if isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
+            _, hidden = self.rnn(embedding)
+            return hidden
 
 class EnteDecoder(nn.Module):
 
-    def __init__(self, input_size, embedding_size, hidden_size, output_size, num_layers, dropout):
+    def __init__(self, cell_type: str, input_size, embedding_size, hidden_size, output_size, num_layers, dropout, bidi):
 
         super(EnteDecoder, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+
+        # if self.num_layers == 1:
+            # self.dropout = nn.Dropout(0)
+        # else:
         self.dropout = nn.Dropout(dropout)
+
         self.embedding = nn.Embedding(input_size, embedding_size)
-        self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout = dropout)
+
+        assert cell_type is not None, "Provide a valid cell type"
+
+        if cell_type == "LSTM":
+            self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+        
+        elif cell_type == "GRU":
+            self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+
+        elif cell_type == "RNN":
+            self.rnn = nn.RNN(embedding_size, hidden_size, num_layers, dropout=dropout)#, bidirectional=bidi)
+
         self.fully_conn = nn.Linear(hidden_size, output_size)
 
     def forward(self, x_trai, hidden, cell):
@@ -58,19 +93,25 @@ class EnteDecoder(nn.Module):
         x_trai = x_trai.unsqueeze(0)
         embedding = self.dropout(self.embedding(x_trai))
 
-        out, (hidden, cell) = self.rnn(embedding, (hidden, cell))
+        if isinstance(self.rnn, nn.LSTM):
+            output, (hidden, cell) = self.rnn(embedding, (hidden, cell))
+        elif isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
+            output, hidden = self.rnn(embedding, hidden)
 
-        predictions = self.fully_conn(out)
-        predictions = torch.softmax(predictions, dim=2)
+        predictions = self.fully_conn(output)
+        predictions = torch.softmax(predictions, dim = 2)
         predictions = predictions.squeeze(0)
 
-        return predictions, hidden, cell
+        if isinstance(self.rnn, nn.LSTM):
+            return predictions, hidden, cell
+        elif isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
+            return predictions, hidden
 
-class EnteS2S(nn.Module):
+class EnteSeq2Seq(nn.Module):
 
     def __init__(self, encoder, decoder, device):
 
-        super(EnteS2S, self).__init__()
+        super(EnteSeq2Seq, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
@@ -83,71 +124,125 @@ class EnteS2S(nn.Module):
 
         outputs = torch.zeros(target_len, batch_siz, target_vocab_length).to(self.device)
 
-        hidden, cell = self.encoder(source)
+        if isinstance(self.encoder.rnn, nn.GRU) or isinstance(self.encoder.rnn, nn.RNN):
+            hidden = self.encoder(source)
+
+        if isinstance(self.encoder.rnn, nn.LSTM):
+            hidden, cell = self.encoder(source)
 
         x_targ = target[0]
 
         for count in range(1, target_len):
-            out, hidden, cell = self.decoder(x_targ, hidden, cell)
+
+            if isinstance(self.decoder.rnn, nn.LSTM):
+                out, hidden, cell = self.decoder(x_targ, hidden, cell)
+            elif isinstance(self.decoder.rnn, nn.GRU) or isinstance(self.encoder.rnn, nn.RNN):
+                out, hidden = self.decoder(x_targ, hidden, None)
+
             outputs[count] = out
-            best = out.argmax(2).squeeze()
+            best = out.argmax(1)
             x_targ = target[count] if random.random() < tfr else best
 
         return outputs
 
+class EnteTransliterator:
 
-epochs = 10
-learning_rate = 0.001
-batch_size = 128
+    def __init__(
+        self,
+        cell_type: str = "LSTM",
+        epochs: int = 15,
+        encoder_layers: int = 2,
+        decoder_layers: int = 2,
+        hidden_size: int = 128,
+        lr: float = 1e-3,
+        batch_size: int = 128,
+        dropout: float = 0.5,
+        bidirectional: bool = True,
+        emb: int = 100
+    ):
 
-train_data.set_batch_size(batch_size)
-input_size_encoder = train_data.num_encoder_tokens
-input_size_decoder = train_data.num_decoder_tokens
+        self.cell_type = cell_type
+        self.epochs = epochs
+        self.encoder_layers = encoder_layers
+        self.decoder_layers = decoder_layers
+        self.hidden_size = hidden_size
+        self.learning_rate = lr
+        self.batch_size = batch_size
+        self.dropout = dropout
+        self.bidirectional = bidirectional
+        self.embedding_size = emb
 
-embedding_size = 100 #TODO configurable
+    def train(self):
+        
+        train_data.set_batch_size(self.batch_size)
+        input_size_encoder = train_data.num_encoder_tokens
+        input_size_decoder = train_data.num_decoder_tokens
 
-# total_batches = 1 # TODO
-total_batches = len(train_data.source) // batch_size # TODO
+        total_batches = len(train_data.source) // self.batch_size
 
-hidden_size = 1024 # sweep param
-num_layers = 2 # sweep param
-
-dropout = 0.5
-
-encoder = EnteEncoder(
+        encoder = EnteEncoder(
+            self.cell_type,
             input_size_encoder,
-            embedding_size,
-            hidden_size,
-            num_layers,
-            dropout
+            self.embedding_size,
+            self.hidden_size,
+            self.encoder_layers,
+            self.dropout,
+            self.bidirectional
         )
 
-decoder = EnteDecoder(
+        decoder = EnteDecoder(
+            self.cell_type,
             input_size_decoder,
-            embedding_size,
-            hidden_size,
+            self.embedding_size,
+            self.hidden_size,
             input_size_decoder,
-            num_layers,
-            dropout
+            self.decoder_layers,
+            self.dropout,
+            self.bidirectional
         )
 
-model = EnteS2S(encoder, decoder, DEVICE).to(DEVICE)
+        model = EnteSeq2Seq(encoder, decoder, DEVICE).to(DEVICE)
 
-loss = nn.CrossEntropyLoss(ignore_index=train_data.target_chars_index[Data.pad])
-optimizer = optim.Adam(model.parameters(), lr = learning_rate)
+        loss = nn.CrossEntropyLoss(ignore_index=train_data.target_chars_index[Data.pad])
+        optimizer = optim.Adam(model.parameters(), lr = self.learning_rate)
 
-for epoch in range(epochs):
+        accuracy = 0
+        los = None
 
-    for batch in range(total_batches):
+        val_accuracy = 0
+        val_los = None
 
-        input_data, target = train_data.get_batch(DEVICE)
-        output = model(input_data, target).to(DEVICE)
+        for epoch in range(self.epochs):
 
-        output = output[1:].reshape(-1, output.shape[2])
-        target = target[1:].reshape(-1)
+            total_correct = 0
+            total_samples = 0
 
-        optimizer.zero_grad()
-        los = loss(output, target)
-        los.backward()
+            for batch in range(total_batches):
 
-    print(f'Epoch: {epoch + 1} Loss: {los}')
+                input_data, target = train_data.get_batch(DEVICE)
+                output = model(input_data, target).to(DEVICE)
+
+                output = output[1:].reshape(-1, output.shape[2])
+                target = target[1:].reshape(-1)
+
+                optimizer.zero_grad()
+                los = loss(output, target)
+                los.backward()
+                optimizer.step()
+
+                predicted = torch.argmax(output, dim=1)
+                correct = (predicted == target).sum().item()
+                total_correct += correct
+                total_samples += target.size(0)
+
+            accuracy = total_correct / total_samples
+            print(f'Epoch {epoch + 1} Accuracy {accuracy * 100}')
+
+        wb.log({"train_accuracy": 100 * accuracy})
+        wb.log({"train_loss": los})
+
+    def test(self):
+        pass
+
+ente = EnteTransliterator(cell_type="LSTM")
+ente.train()

@@ -147,7 +147,6 @@ class Data:
     def set_batch_size(self, size):
         self.batch_size = size
 
-
     @staticmethod
     def tokenizer(word):
         return [char for char in word]

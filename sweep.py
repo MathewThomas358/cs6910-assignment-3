@@ -1,0 +1,91 @@
+"""
+
+"""
+
+import wandb as wb
+
+from main import EnteTransliterator
+
+
+def init(sweep_count: int = 1):
+
+    wandb_project:str = "cs6910-assignment-3"
+    wandb_entity:str = "cs22m056"
+
+    sweep_conf = {
+
+        'method' : 'bayes',
+        'metric' : {
+        'name' : 'validation_accuracy',
+        'goal' : 'maximize'   
+        },
+        'parameters': {
+            'epochs': {
+                'values': [5, 10, 15, 20, 25]
+            },
+            'no_of_encoder_layers': {
+                'values': [3, 1, 2]
+            },
+            'no_of_decoder_layers': {
+                'values': [3, 1, 2]
+            },
+            'hidden_size': {
+                'values': [64, 128, 32]
+            },
+            'cell_type': {
+                'values': ['LSTM', 'GRU', 'RNN']
+            },
+            'learning_rate': {
+                'values': [1e-3, 1e-4, 1e-5] 
+            },
+            'batch_size' : {
+                'values':[32, 64, 128]
+            },
+            'dropout': {
+                'values': [0.2, 0.3, 0.5]
+            },
+            'bidirectional': {
+                'values': [True, False]
+            },
+            'emb': {
+                'values': [100, 150, 200]
+            }
+            #TODO: beam search
+        }
+    }
+
+    sweep_id = wb.sweep(sweep_conf, project=wandb_project, entity=wandb_entity)
+    wb.agent(sweep_id, sweep, wandb_entity, wandb_project, sweep_count)
+
+def sweep():
+    
+    wb.init(resume="auto")
+    config = wb.config
+
+    name = (
+        "cell_" + str(config.cell_type) +
+        "_hid_" + str(config.hidden_size) +
+        "_bid_" + str(config.bidirectional) +
+        "_bat_" + str(config.batch_size)
+    )
+
+    wb.run.name = name
+
+    transliterator = EnteTransliterator(
+        config.cell_type,
+        config.epochs,
+        config.no_of_encoder_layers,
+        config.no_of_decoder_layers,
+        config.hidden_size,
+        config.learning_rate,
+        config.batch_size,
+        config.dropout,
+        config.bidirectional,
+        config.emb
+    )
+
+    transliterator.train()
+    transliterator.test()
+
+if __name__ == "__main__":
+    init(sweep_count=5)
