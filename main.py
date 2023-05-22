@@ -56,10 +56,6 @@ class EnteEncoder(nn.Module):
         if isinstance(self.rnn, nn.LSTM):
             _, (hidden, cell) = self.rnn(embedding)
 
-            # if self.bidi:
-                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
-            # print("EEF", hidden.shape)
-
             return hidden, cell
 
         if isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
@@ -108,13 +104,9 @@ class EnteDecoder(nn.Module):
 
         if isinstance(self.rnn, nn.LSTM):
             output, (hidden, cell) = self.rnn(embedding, (hidden, cell))
-            # print("EDF", hidden.shape)
-            # if self.bidi:
-                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
+
         elif isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
             output, hidden = self.rnn(embedding, hidden)
-            # if self.bidi:
-                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
 
         predictions = self.fully_conn(output)
         predictions = torch.softmax(predictions, dim = 2)
@@ -148,13 +140,8 @@ class EnteSeq2Seq(nn.Module):
 
         if isinstance(self.encoder.rnn, nn.LSTM):
             hidden, cell = self.encoder(source)
-            # print("S2SF", hidden.shape)
 
         x_targ = target[0]
-
-        # if self.bidi:
-            # print(hidden.shape)
-            # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
 
         for count in range(1, target_len):
 
@@ -187,8 +174,18 @@ class EnteTransliterator:
 
         self.cell_type = cell_type
         self.epochs = epochs
+
         self.encoder_layers = encoder_layers
         self.decoder_layers = decoder_layers
+
+        if encoder_layers != decoder_layers:
+            self.encoder_layers = decoder_layers
+        # if encoder_layers == 1 and decoder_layers != 1:
+        #     self.encoder_layers = decoder_layers
+        #     self.decoder_layers = decoder_layers
+        # if encoder_layers != 1 and decoder_layers == 1:
+        #     self.decoder_layers = encoder_layers
+        #     self.encoder_layers = encoder_layers
         self.hidden_size = hidden_size
         self.learning_rate = lr
         self.batch_size = batch_size
@@ -196,9 +193,11 @@ class EnteTransliterator:
         self.bidirectional = bidirectional
         self.embedding_size = emb
 
+
     def train(self):
         
         train_data.set_batch_size(self.batch_size)
+        valid_data.set_batch_size(self.batch_size)
         input_size_encoder = train_data.num_encoder_tokens
         input_size_decoder = train_data.num_decoder_tokens
 
@@ -241,6 +240,7 @@ class EnteTransliterator:
             total_correct = 0
             total_samples = 0
 
+            model.train()
             for batch in range(total_batches):
 
                 input_data, target = train_data.get_batch(DEVICE)
@@ -260,13 +260,72 @@ class EnteTransliterator:
                 total_samples += target.size(0)
 
             accuracy = total_correct / total_samples
-            print(f'Epoch {epoch + 1} Accuracy {accuracy * 100}')
+            model.eval()
+
+            with torch.no_grad():
+                val_total_correct = 0
+                val_total_samples = 0
+
+                for batch in range(total_batches):
+
+                    val_input_data, val_target = valid_data.get_batch(DEVICE)
+                    val_output = model(val_input_data, val_target).to(DEVICE)
+
+                    val_output = val_output[1:].reshape(-1, val_output.shape[2])
+                    val_target = val_target[1:].reshape(-1)
+
+                    val_los = loss(val_output, val_target)
+
+                    val_predicted = torch.argmax(val_output, dim=1)
+                    val_correct = (val_predicted == val_target).sum().item()
+                    val_total_correct += val_correct
+                    val_total_samples += val_target.size(0)
+
+            val_accuracy = val_total_correct / val_total_samples
+
+            sample_in, sample_target = train_data.get_random_sample(0)
+            sample_in = sample_in.to(DEVICE)
+            sample_target = sample_target.to(DEVICE)
+            pred = model(
+                sample_in.unsqueeze(1),
+                sample_target.unsqueeze(1)
+            )
+
+            print(
+                "SampleIn", train_data.sequence_to_text(sample_in, True),
+                "SampleTar", train_data.sequence_to_text(sample_target),
+                "Pred", train_data.sequence_to_text(
+                        torch.argmax(pred.squeeze(), dim=1)
+                    )
+            )
+
+            print(f'Epoch: {epoch + 1} Accuracy: {accuracy * 100} ValAc: {val_accuracy * 100}')
+
 
         wb.log({"train_accuracy": 100 * accuracy})
+        wb.log({"valid_accuracy": 100 * val_accuracy})
         wb.log({"train_loss": los})
+        wb.log({"valid_loss": val_los})
 
     def test(self):
         pass
 
-# ente = EnteTransliterator(cell_type="GRU", bidirectional=True)
-# ente.train()
+#! TODO : variable encoder decoder layers
+#! TODO: attention
+#! TODO: Inference models
+
+print("Training from main")
+ente = EnteTransliterator(
+    cell_type="LSTM",
+    bidirectional=True,
+    batch_size=128,
+    dropout=0.3,
+    emb=150,
+    epochs=25,
+    hidden_size=1024,
+    lr=1e-3,
+    decoder_layers=2,
+    encoder_layers=2
+)
+
+ente.train()

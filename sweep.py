@@ -42,7 +42,7 @@ def init(sweep_count: int = 1):
                 'values':[32, 64, 128]
             },
             'dropout': {
-                'values': [0.2, 0.3, 0.5]
+                'values': [0, 0.2, 0.3, 0.5]
             },
             'bidirectional': {
                 'values': [True, False]
@@ -88,4 +88,4 @@ def sweep():
     transliterator.test()
 
 if __name__ == "__main__":
-    init(sweep_count=5)
+    init(sweep_count=20)

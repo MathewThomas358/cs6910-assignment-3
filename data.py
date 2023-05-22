@@ -4,6 +4,7 @@ Assignment - 3
 @author: CS22M056
 """
 
+import random
 import numpy as np
 import torch
 
@@ -146,6 +147,30 @@ class Data:
 
     def set_batch_size(self, size):
         self.batch_size = size
+
+
+    def get_random_sample(self, index = None):
+
+        if index is None:
+            index = random.randint(0, len(self.source_dict) - 1)
+        input_sequence = self.encoder_source_data[index]
+        target_sequence = self.decoder_source_data[index]
+        input_data = torch.tensor(input_sequence, dtype=torch.long)
+        target = torch.tensor(target_sequence, dtype=torch.long)
+        return input_data, target
+
+    def sequence_to_text(self, sequence, source = False):
+        if sequence.dim() == 0:
+            sequence = sequence.unsqueeze(0)
+        text = ""
+        for idx in sequence:
+            char = self.rev_target_chars_index[idx.item()]
+            if source:
+                char = self.rev_source_chars_index[idx.item()]
+            if char == self.end:
+                break
+            text += char
+        return text
 
     @staticmethod
     def tokenizer(word):
