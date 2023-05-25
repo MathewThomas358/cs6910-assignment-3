@@ -49,8 +49,13 @@ def init(sweep_count: int = 1):
             },
             'emb': {
                 'values': [100, 150, 200]
+            },
+            'search_method': {
+                'values': ['greedy', 'beam']
+            },
+            'beam_width': {
+                'values': [1, 3, 4, 5]
             }
-            #TODO: beam search
         }
     }
 
@@ -81,7 +86,9 @@ def sweep():
         config.batch_size,
         config.dropout,
         config.bidirectional,
-        config.emb
+        config.emb,
+        config.search_method,
+        config.beam_width
     )
 
     transliterator.train()

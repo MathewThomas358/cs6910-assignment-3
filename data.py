@@ -142,12 +142,43 @@ class Data:
         input_data = torch.tensor(input_data, dtype=torch.long).transpose(0, 1).to(device)
         target_data = torch.tensor(target_data, dtype=torch.long).transpose(0, 1).to(device)
         
+        # print(input_data.shape, target_data.shape)
+        return input_data, target_data
+
+    def get_data_point(self, index, device):
+
+        input_data = self.encoder_source_data[index]
+        target_data = self.decoder_source_data[index]
+
+        # Convert the numpy arrays to PyTorch tensors
+        input_data = torch.tensor(input_data, dtype=torch.long).unsqueeze(1).to(device)
+        target_data = torch.tensor(target_data, dtype=torch.long).unsqueeze(1).to(device)
+        
+        # print(input_data.shape)
         return input_data, target_data
 
 
     def set_batch_size(self, size):
         self.batch_size = size
 
+
+    def indices_to_word(self, indices, source=False):
+        if isinstance(indices, torch.Tensor):
+            indices = indices.tolist()
+        if not isinstance(indices, list):
+            indices = [indices]
+
+        words = []
+        for idx in indices:
+            if idx == self.target_chars_index[self.end] or (source and idx == self.source_chars_index[" "]):
+                break
+            char = self.rev_target_chars_index[idx]
+            if source:
+                char = self.rev_source_chars_index[idx]
+            words.append(char)
+
+        word = "".join(words)
+        return word[1:]
 
     def get_random_sample(self, index = None):
 
@@ -167,12 +198,8 @@ class Data:
             char = self.rev_target_chars_index[idx.item()]
             if source:
                 char = self.rev_source_chars_index[idx.item()]
-            if char == self.end:
+            if char == self.end or (source and char == " "):
                 break
             text += char
         return text
-
-    @staticmethod
-    def tokenizer(word):
-        return [char for char in word]
 

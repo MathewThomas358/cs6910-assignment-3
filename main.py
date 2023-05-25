@@ -3,6 +3,7 @@
     Reurrent Neural Networks (RNNs)
 """
 
+import itertools
 import random
 
 import torch
@@ -15,6 +16,7 @@ from data import Data
 
 # DEVICE = torch.device("cpu")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu") #TODO
+out = open("out.txt", mode='w')
 
 print(f'Running on {DEVICE}')
 
@@ -101,6 +103,7 @@ class EnteDecoder(nn.Module):
 
         x_trai = x_trai.unsqueeze(0)
         embedding = self.dropout(self.embedding(x_trai))
+        # print("Dec", x_trai.shape, embedding.shape)
 
         if isinstance(self.rnn, nn.LSTM):
             output, (hidden, cell) = self.rnn(embedding, (hidden, cell))
@@ -135,6 +138,7 @@ class EnteSeq2Seq(nn.Module):
 
         outputs = torch.zeros(target_len, batch_siz, target_vocab_length).to(self.device)
 
+        # print("ES2S Ein", source.shape)
         if isinstance(self.encoder.rnn, nn.GRU) or isinstance(self.encoder.rnn, nn.RNN):
             hidden = self.encoder(source)
 
@@ -142,6 +146,8 @@ class EnteSeq2Seq(nn.Module):
             hidden, cell = self.encoder(source)
 
         x_targ = target[0]
+
+        # print("ES2S Din", x_targ.shape, hidden.shape, cell.shape)
 
         for count in range(1, target_len):
 
@@ -156,6 +162,7 @@ class EnteSeq2Seq(nn.Module):
 
         return outputs
 
+
 class EnteTransliterator:
 
     def __init__(
@@ -169,7 +176,9 @@ class EnteTransliterator:
         batch_size: int = 128,
         dropout: float = 0.5,
         bidirectional: bool = True,
-        emb: int = 100
+        emb: int = 100,
+        search_method: str = 'beam',
+        beam_width: int = 4
     ):
 
         self.cell_type = cell_type
@@ -179,20 +188,18 @@ class EnteTransliterator:
         self.decoder_layers = decoder_layers
 
         if encoder_layers != decoder_layers:
-            self.encoder_layers = decoder_layers
-        # if encoder_layers == 1 and decoder_layers != 1:
-        #     self.encoder_layers = decoder_layers
-        #     self.decoder_layers = decoder_layers
-        # if encoder_layers != 1 and decoder_layers == 1:
-        #     self.decoder_layers = encoder_layers
-        #     self.encoder_layers = encoder_layers
+            self.encoder_layers = decoder_layers #! TODO
         self.hidden_size = hidden_size
         self.learning_rate = lr
         self.batch_size = batch_size
         self.dropout = dropout
         self.bidirectional = bidirectional
         self.embedding_size = emb
+        self.search_method = search_method
+        self.beam_width = beam_width
 
+        self.model: EnteSeq2Seq = None #TODO Optional
+        self.inference_mode = False
 
     def train(self):
         
@@ -224,27 +231,29 @@ class EnteTransliterator:
             self.bidirectional
         )
 
-        model = EnteSeq2Seq(encoder, decoder, DEVICE, self.bidirectional).to(DEVICE)
+        self.model = EnteSeq2Seq(encoder, decoder, DEVICE, self.bidirectional).to(DEVICE)
 
         loss = nn.CrossEntropyLoss(ignore_index=train_data.target_chars_index[Data.pad])
-        optimizer = optim.Adam(model.parameters(), lr = self.learning_rate)
+        optimizer = optim.Adam(self.model.parameters(), lr = self.learning_rate)
 
         accuracy = 0
         los = None
-
-        val_accuracy = 0
-        val_los = None
 
         for epoch in range(self.epochs):
 
             total_correct = 0
             total_samples = 0
 
-            model.train()
-            for batch in range(total_batches):
+            self.model.train()
+            assert not self.inference_mode
 
+            # for i in range(1): #TODO
+            for i in range(total_batches):
+
+                if i % 25 == 0:
+                    print(f'Epoch {epoch + 1} of {self.epochs}. Batch {i + 1} of {total_batches} ')
                 input_data, target = train_data.get_batch(DEVICE)
-                output = model(input_data, target).to(DEVICE)
+                output = self.model(input_data, target).to(DEVICE)
 
                 output = output[1:].reshape(-1, output.shape[2])
                 target = target[1:].reshape(-1)
@@ -259,62 +268,205 @@ class EnteTransliterator:
                 total_correct += correct
                 total_samples += target.size(0)
 
+
             accuracy = total_correct / total_samples
-            model.eval()
-
-            with torch.no_grad():
-                val_total_correct = 0
-                val_total_samples = 0
-
-                for batch in range(total_batches):
-
-                    val_input_data, val_target = valid_data.get_batch(DEVICE)
-                    val_output = model(val_input_data, val_target).to(DEVICE)
-
-                    val_output = val_output[1:].reshape(-1, val_output.shape[2])
-                    val_target = val_target[1:].reshape(-1)
-
-                    val_los = loss(val_output, val_target)
-
-                    val_predicted = torch.argmax(val_output, dim=1)
-                    val_correct = (val_predicted == val_target).sum().item()
-                    val_total_correct += val_correct
-                    val_total_samples += val_target.size(0)
-
-            val_accuracy = val_total_correct / val_total_samples
-
+    
             sample_in, sample_target = train_data.get_random_sample(0)
             sample_in = sample_in.to(DEVICE)
             sample_target = sample_target.to(DEVICE)
-            pred = model(
+            pred = self.model(
                 sample_in.unsqueeze(1),
                 sample_target.unsqueeze(1)
             )
 
-            print(
-                "SampleIn", train_data.sequence_to_text(sample_in, True),
-                "SampleTar", train_data.sequence_to_text(sample_target),
-                "Pred", train_data.sequence_to_text(
+            out.write(
+                "SampleIn " + train_data.sequence_to_text(sample_in, True) +
+                " SampleTar " + train_data.sequence_to_text(sample_target)[1:] +
+                " Pred " + train_data.sequence_to_text(
                         torch.argmax(pred.squeeze(), dim=1)
-                    )
+                    ) + "\n"
             )
 
-            print(f'Epoch: {epoch + 1} Accuracy: {accuracy * 100} ValAc: {val_accuracy * 100}')
 
+            print(f'Epoch: {epoch + 1} Accuracy: {accuracy * 100:.2f} Validation Accuracy: {val_acc * 100:.2f}')
+        
+        val_acc = self.test(valid_data)
 
         wb.log({"train_accuracy": 100 * accuracy})
-        wb.log({"valid_accuracy": 100 * val_accuracy})
         wb.log({"train_loss": los})
-        wb.log({"valid_loss": val_los})
+        wb.log({"validation_accuracy": val_acc})
 
-    def test(self):
-        pass
+    def inference_model(self):
+
+        self.model.eval()
+        self.model.encoder.eval()
+        self.model.decoder.eval()
+
+        return self.model.encoder, self.model.decoder
+
+    def __greedy_search(self, input_sequence, data):
+        encoder, decoder = self.inference_model()
+        with torch.no_grad():
+            encoder_cell = None
+            if isinstance(encoder.rnn, nn.GRU) or isinstance(encoder.rnn, nn.RNN):
+                encoder_hidden = self.encoder(input_sequence)
+
+            if isinstance(encoder.rnn, nn.LSTM):
+                encoder_hidden, encoder_cell = encoder(input_sequence)
+
+            start_token_index = data.target_chars_index[Data.start]
+            end_token_index = data.target_chars_index[Data.end]
+
+            sequence = torch.tensor([[start_token_index]]).to(DEVICE)
+            hidden, cell = encoder_hidden, encoder_cell
+
+            for _ in range(data.max_decoder_input_length):
+
+                if isinstance(decoder.rnn, nn.LSTM):
+                    out, hidden, cell = decoder(sequence[:, -1], hidden, cell)
+
+                if isinstance(decoder.rnn, nn.GRU) or isinstance(decoder.rnn, nn.RNN):
+                    out = decoder(last_token, hidden)
+
+                probabilities = torch.softmax(out, dim=-1)
+                _, top_token = torch.max(probabilities, dim=-1)
+
+                current_token = top_token.unsqueeze(1)
+                sequence = torch.cat((sequence, current_token), dim=1)
+
+                if current_token.item() == end_token_index:
+                    break
+
+            token_indices = sequence.squeeze().tolist()
+
+            return token_indices
+
+    def __beam_search(self, inp, data, beam_width):
+        
+        encoder, decoder = self.inference_model()
+        with torch.no_grad():
+
+            encoder_cell = None
+            if isinstance(encoder.rnn, nn.GRU) or isinstance(encoder.rnn, nn.RNN):
+                encoder_hidden = self.encoder(inp)
+
+            if isinstance(encoder.rnn, nn.LSTM):
+                encoder_hidden, encoder_cell = encoder(inp)
+            
+            start_token_index = data.target_chars_index[Data.start]
+            current_beam = [(torch.tensor([[start_token_index]]).to(DEVICE), 0.0, encoder_hidden, encoder_cell)]
+
+            completed_sequences = []
+
+            for _ in range(data.max_decoder_input_length):
+
+                new_beam = []
+
+                for sequence, sequence_score, hidden, cell in current_beam:
+
+                    last_token = sequence[:, -1]
+
+                    if isinstance(decoder.rnn, nn.LSTM):
+                        out, hidden, cell = decoder(last_token, hidden, cell)
+
+                    if isinstance(decoder.rnn, nn.GRU) or isinstance(decoder.rnn, nn.RNN):
+                        out, hidden = decoder(last_token, hidden)
+
+                    log_probs = torch.log_softmax(out, dim = -1)
+
+                    topk_log_probs, topk_tokens = log_probs.topk(beam_width, dim = -1)
+
+                    for i in range(beam_width):
+
+                        token = topk_tokens[:,i]
+                        token_score = topk_log_probs[:,i]
+
+                        new_seq = torch.cat((sequence, token.unsqueeze(0)), dim = 1)
+                        new_score = sequence_score + token_score.item()
+
+                        if token.item() == data.target_chars_index[Data.end]:
+                            completed_sequences.append((new_seq, new_score))
+                        else:
+                            new_beam.append((new_seq, new_score, hidden, cell))
+
+                new_beam.sort(key=lambda x: x[1], reverse = True)
+                current_beam = new_beam[:beam_width]
+
+                if all(sequence[:, -1].item() == data.target_chars_index[Data.end] for sequence, _, _, _ in current_beam):
+                    break
+
+            completed_sequences.sort(key=lambda x: x[1], reverse=True)
+            # print(completed_sequences)
+            # Get the best completed sequence
+            # if completed_sequences:
+
+            if not completed_sequences:
+                # print("Red Flag")
+                return self.__greedy_search(inp, data)
+
+            best_sequence = completed_sequences[0][0]
+
+            # Convert the best sequence to a list of token indices
+            token_indices = best_sequence.squeeze().tolist()
+
+            return token_indices
+
+            
+
+    def decode_sequence(self, input_sequence, data, search_method = 'beam', beam_width = 4):
+        
+        # input_sequence = input_sequence.unsqueeze(0) 
+
+        if search_method == 'greedy':
+            return self.__greedy_search(input_sequence, data)
+        elif search_method == 'beam':
+            return self.__beam_search(input_sequence, data, beam_width)
+        else:
+            raise ValueError("Invalid search method. Please choose 'greedy' or 'beam'.")
+
+
+    def test(self, data: Data):
+
+        total = 0
+        correct = 0
+        print("Starting test") #TODO
+        for i in range(len(data.source)):
+
+            input_sequence, target_sequence = data.get_data_point(i, DEVICE)
+
+            decoded_tokens = self.decode_sequence(
+                input_sequence, 
+                data,
+                search_method=self.search_method, 
+                beam_width=self.beam_width
+            )
+            decoded_word = data.indices_to_word(decoded_tokens)
+            target_word = data.indices_to_word(list(itertools.chain(*target_sequence.tolist()))) #TODO
+            # print(target_word)
+            out.write(target_word + " " + decoded_word + "\n")
+
+            total += 1
+            if decoded_word == target_word:
+                correct += 1
+
+            if i % 100 == 0:
+                import datetime as time
+                print("Test in progress", time.datetime.now())
+
+            # break    #TODO
+
+        accuracy = correct / total
+        self.model.train()
+        self.model.encoder.train()
+        self.model.decoder.train()
+
+        return accuracy
 
 #! TODO : variable encoder decoder layers
 #! TODO: attention
 #! TODO: Inference models
 
-print("Training from main")
+print(f'Training from main using {DEVICE}')
 ente = EnteTransliterator(
     cell_type="LSTM",
     bidirectional=True,
@@ -325,7 +477,10 @@ ente = EnteTransliterator(
     hidden_size=1024,
     lr=1e-3,
     decoder_layers=2,
-    encoder_layers=2
+    encoder_layers=2,
+    search_method='beam',
+    beam_width=3
 )
 
 ente.train()
+out.close()

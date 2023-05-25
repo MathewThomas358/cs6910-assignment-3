@@ -6,3 +6,4 @@ test.txt
 requirements.txt
 .vscode/
 wandb/
+out.txt
