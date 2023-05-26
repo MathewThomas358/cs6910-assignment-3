@@ -15,7 +15,6 @@ import wandb as wb
 
 from data import Data
 
-# DEVICE = torch.device("cpu")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu") #TODO
 out = open("out.txt", mode='w')
 
@@ -63,8 +62,6 @@ class EnteEncoder(nn.Module):
 
         if isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
             _, hidden = self.rnn(embedding)
-            # if self.bidi:
-                # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
             return hidden
 
 class EnteDecoder(nn.Module):
@@ -77,9 +74,6 @@ class EnteDecoder(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
-        # if self.num_layers == 1:
-            # self.dropout = nn.Dropout(0)
-        # else:
         self.dropout = nn.Dropout(dropout)
 
         self.embedding = nn.Embedding(input_size, embedding_size)
@@ -104,7 +98,6 @@ class EnteDecoder(nn.Module):
 
         x_trai = x_trai.unsqueeze(0)
         embedding = self.dropout(self.embedding(x_trai))
-        # print("Dec", x_trai.shape, embedding.shape)
 
         if isinstance(self.rnn, nn.LSTM):
             output, (hidden, cell) = self.rnn(embedding, (hidden, cell))
@@ -122,6 +115,11 @@ class EnteDecoder(nn.Module):
             return predictions, hidden
 
 class EnteSeq2Seq(nn.Module):
+
+    # Reference: https://www.youtube.com/watch?v=EoGUlvhRYpk
+    # The implementation has been done by referring the above video 
+    # for inspiration. Code hasn't been copied directly but there might
+    # be similarities. 
 
     def __init__(self, encoder, decoder, device, bidi: bool):
 
@@ -147,8 +145,6 @@ class EnteSeq2Seq(nn.Module):
             hidden, cell = self.encoder(source)
 
         x_targ = target[0]
-
-        # print("ES2S Din", x_targ.shape, hidden.shape, cell.shape)
 
         for count in range(1, target_len):
 
@@ -188,8 +184,7 @@ class EnteTransliterator:
         self.encoder_layers = encoder_layers
         self.decoder_layers = decoder_layers
 
-        if encoder_layers != decoder_layers:
-            self.encoder_layers = decoder_layers #! TODO
+        self.encoder_layers = decoder_layers 
         self.hidden_size = hidden_size
         self.learning_rate = lr
         self.batch_size = batch_size
@@ -210,6 +205,8 @@ class EnteTransliterator:
         input_size_decoder = train_data.num_decoder_tokens
 
         total_batches = len(train_data.source) // self.batch_size
+
+        assert self.model is not None
 
         encoder = EnteEncoder(
             self.cell_type,
@@ -241,7 +238,7 @@ class EnteTransliterator:
         los = None
         val_acc = 0
 
-        for epoch in range(self.epochs):
+        for __ in range(self.epochs):
 
             total_correct = 0
             total_samples = 0
@@ -249,9 +246,6 @@ class EnteTransliterator:
             self.model.train()
             assert not self.inference_mode
 
-            print(f'Epoch {epoch + 1} of {self.epochs} at {time.datetime.now()}')
-
-            # for __ in range(1): #TODO
             for __ in range(total_batches):
 
                 input_data, target = train_data.get_batch(DEVICE)
@@ -281,16 +275,6 @@ class EnteTransliterator:
                 sample_target.unsqueeze(1)
             )
 
-            out.write(
-                "SampleIn " + train_data.sequence_to_text(sample_in, True) +
-                " SampleTar " + train_data.sequence_to_text(sample_target)[1:] +
-                " Pred " + train_data.sequence_to_text(
-                        torch.argmax(pred.squeeze(), dim=1)
-                    ) + "\n"
-            )
-
-        tot = 0
-        cor = 0
         self.model.eval()
         for i in range(len(valid_data.source)):
 
@@ -299,23 +283,19 @@ class EnteTransliterator:
             tar = tar.to(DEVICE)
             pred = self.model(inp.unsqueeze(1), tar.unsqueeze(1))
 
-            # out.write(
-            #     train_data.sequence_to_text(torch.argmax(pred.squeeze(), dim=1), False) +
-            #     " <- Pred - Targ -> " +
-            #     train_data.sequence_to_text(tar)[1:]
-            # )
+            try:
+                if valid_data.sequence_to_text(torch.argmax(pred.squeeze(), dim=1), False) == valid_data.sequence_to_text(tar)[1:]:
+                    cor += 1
+                tot += 1
+            except KeyError:
+                pass
+                
+        val_acc = self.test(valid_data) 
+        val_acc = 0
 
-            if train_data.sequence_to_text(torch.argmax(pred.squeeze(), dim=1), False) == train_data.sequence_to_text(tar)[1:]:
-                cor += 1
-            tot += 1
-
-        val_acc = 100 * cor / tot
-        val_acc1 = self.test(valid_data) 
-
-        print(f'Training Accuracy: {accuracy * 100:.2f} Validation Accuracy: {val_acc * 100:.2f} Validation Accuracy 1: {val_acc1 * 100:.2f}')
-        wb.log({"validation_accuracy": 100 * accuracy})
+        print(f'Training Accuracy: {accuracy * 100:.2f} Validation Accuracy: {val_acc * 100:.2f}')
+        wb.log({"validation_accuracy": 100 * val_acc})
         wb.log({"train_loss": los})
-        # wb.log({"validation_accuracy": val_acc})
 
     def inference_model(self):
 
@@ -418,12 +398,8 @@ class EnteTransliterator:
                     break
 
             completed_sequences.sort(key=lambda x: x[1], reverse=True)
-            # print(completed_sequences)
-            # Get the best completed sequence
-            # if completed_sequences:
 
             if not completed_sequences:
-                # print("Red Flag")
                 return self.__greedy_search(inp, data)
 
             best_sequence = completed_sequences[0][0]
@@ -437,7 +413,6 @@ class EnteTransliterator:
 
     def decode_sequence(self, input_sequence, data, search_method = 'beam', beam_width = 4):
         
-        # input_sequence = input_sequence.unsqueeze(0) 
 
         if search_method == 'greedy':
             return self.__greedy_search(input_sequence, data)
@@ -464,7 +439,6 @@ class EnteTransliterator:
             )
             decoded_word = data.indices_to_word(decoded_tokens)
             target_word = data.indices_to_word(list(itertools.chain(*target_sequence.tolist()))) #TODO
-            # out.write(target_word + " " + decoded_word + "\n")
 
             total += 1
             if decoded_word == target_word:
@@ -477,26 +451,3 @@ class EnteTransliterator:
         self.model.decoder.train()
 
         return accuracy
-
-#! TODO : variable encoder decoder layers
-#! TODO: attention
-#! TODO: Inference models
-
-# print(f'Training from main using {DEVICE}')
-# ente = EnteTransliterator(
-#     cell_type="LSTM",
-#     bidirectional=True,
-#     batch_size=32,
-#     dropout=0,
-#     emb=100,
-#     epochs=40,
-#     hidden_size=64,
-#     lr=1e-4,
-#     decoder_layers=3,
-#     encoder_layers=3,
-#     search_method='beam',
-#     beam_width=4
-# )
-
-# ente.train()
-# out.close()

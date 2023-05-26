@@ -5,6 +5,7 @@
 import wandb as wb
 
 from main import EnteTransliterator
+from atten import EnteTransliteratorAttn
 from data import Data
 
 DATA_DIR_PATH = r'data/mal/'
@@ -16,10 +17,15 @@ train_data = Data(DATA_DIR_PATH + DATA_TRAIN_PATH)
 valid_data = Data(DATA_DIR_PATH + DATA_VALID_PATH)
 test_data  = Data(DATA_DIR_PATH + DATA_TEST_PATH)
 
-def init(sweep_count: int = 1):
+TYPE = "atten"
+
+def init(sweep_count: int = 1, type_: str = "atten"):
 
     wandb_project:str = "cs6910-assignment-3"
     wandb_entity:str = "cs22m056"
+
+    global TYPE
+    TYPE = type_
 
     sweep_conf = {
 
@@ -77,31 +83,49 @@ def sweep():
     config = wb.config
 
     name = (
-        "cell_" + str(config.cell_type) +
+        TYPE + 
+        "_cell_" + str(config.cell_type) +
         "_hid_" + str(config.hidden_size) +
-        "_bid_" + str(config.bidirectional) +
+        "_bid_" + str(config.emb) +
         "_bat_" + str(config.batch_size)
     )
 
     wb.run.name = name
+    print(name)
 
-    transliterator = EnteTransliterator(
-        config.cell_type,
-        config.epochs,
-        config.no_of_encoder_layers,
-        config.no_of_decoder_layers,
-        config.hidden_size,
-        config.learning_rate,
-        config.batch_size,
-        config.dropout,
-        config.bidirectional,
-        config.emb,
-        config.search_method,
-        config.beam_width
-    )
+    if TYPE == "vanilla":
+
+        transliterator = EnteTransliterator(
+            config.cell_type,
+            config.epochs,
+            config.no_of_encoder_layers,
+            config.no_of_decoder_layers,
+            config.hidden_size,
+            config.learning_rate,
+            config.batch_size,
+            config.dropout,
+            config.bidirectional,
+            config.emb,
+            config.search_method,
+            config.beam_width
+        )
+    
+    if TYPE == "atten":
+
+        transliterator = EnteTransliteratorAttn(
+            config.cell_type,
+            config.epochs,
+            config.hidden_size,
+            config.learning_rate,
+            config.batch_size,
+            config.dropout,
+            config.emb,
+            config.search_method,
+            config.beam_width
+        )
 
     transliterator.train()
-    # transliterator.test(valid_data)
+    # transliterator.test(test_data)
 
 if __name__ == "__main__":
-    init(sweep_count=20)
+    init(sweep_count=40, type_ = "atten")
