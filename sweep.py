@@ -5,7 +5,16 @@
 import wandb as wb
 
 from main import EnteTransliterator
+from data import Data
 
+DATA_DIR_PATH = r'data/mal/'
+DATA_TRAIN_PATH = r'mal_train.csv'
+DATA_TEST_PATH = r'mal_test.csv'
+DATA_VALID_PATH = r'mal_valid.csv'
+
+train_data = Data(DATA_DIR_PATH + DATA_TRAIN_PATH)
+valid_data = Data(DATA_DIR_PATH + DATA_VALID_PATH)
+test_data  = Data(DATA_DIR_PATH + DATA_TEST_PATH)
 
 def init(sweep_count: int = 1):
 
@@ -21,7 +30,7 @@ def init(sweep_count: int = 1):
         },
         'parameters': {
             'epochs': {
-                'values': [5, 10, 15, 20, 25]
+                'values': [10, 20, 30, 40]
             },
             'no_of_encoder_layers': {
                 'values': [3, 1, 2]
@@ -92,7 +101,7 @@ def sweep():
     )
 
     transliterator.train()
-    transliterator.test()
+    # transliterator.test(valid_data)
 
 if __name__ == "__main__":
     init(sweep_count=20)

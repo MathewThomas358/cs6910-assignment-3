@@ -5,6 +5,7 @@
 
 import itertools
 import random
+import datetime as time
 
 import torch
 import torch.nn as nn
@@ -108,7 +109,7 @@ class EnteDecoder(nn.Module):
         if isinstance(self.rnn, nn.LSTM):
             output, (hidden, cell) = self.rnn(embedding, (hidden, cell))
 
-        elif isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
+        if isinstance(self.rnn, nn.GRU) or isinstance(self.rnn, nn.RNN):
             output, hidden = self.rnn(embedding, hidden)
 
         predictions = self.fully_conn(output)
@@ -238,6 +239,7 @@ class EnteTransliterator:
 
         accuracy = 0
         los = None
+        val_acc = 0
 
         for epoch in range(self.epochs):
 
@@ -247,11 +249,11 @@ class EnteTransliterator:
             self.model.train()
             assert not self.inference_mode
 
-            # for i in range(1): #TODO
-            for i in range(total_batches):
+            print(f'Epoch {epoch + 1} of {self.epochs} at {time.datetime.now()}')
 
-                if i % 25 == 0:
-                    print(f'Epoch {epoch + 1} of {self.epochs}. Batch {i + 1} of {total_batches} ')
+            # for __ in range(1): #TODO
+            for __ in range(total_batches):
+
                 input_data, target = train_data.get_batch(DEVICE)
                 output = self.model(input_data, target).to(DEVICE)
 
@@ -287,14 +289,33 @@ class EnteTransliterator:
                     ) + "\n"
             )
 
+        tot = 0
+        cor = 0
+        self.model.eval()
+        for i in range(len(valid_data.source)):
 
-            print(f'Epoch: {epoch + 1} Accuracy: {accuracy * 100:.2f} Validation Accuracy: {val_acc * 100:.2f}')
-        
-        val_acc = self.test(valid_data)
+            inp, tar = valid_data.get_random_sample(i)
+            inp = inp.to(DEVICE)
+            tar = tar.to(DEVICE)
+            pred = self.model(inp.unsqueeze(1), tar.unsqueeze(1))
 
-        wb.log({"train_accuracy": 100 * accuracy})
+            # out.write(
+            #     train_data.sequence_to_text(torch.argmax(pred.squeeze(), dim=1), False) +
+            #     " <- Pred - Targ -> " +
+            #     train_data.sequence_to_text(tar)[1:]
+            # )
+
+            if train_data.sequence_to_text(torch.argmax(pred.squeeze(), dim=1), False) == train_data.sequence_to_text(tar)[1:]:
+                cor += 1
+            tot += 1
+
+        val_acc = 100 * cor / tot
+        val_acc1 = self.test(valid_data) 
+
+        print(f'Training Accuracy: {accuracy * 100:.2f} Validation Accuracy: {val_acc * 100:.2f} Validation Accuracy 1: {val_acc1 * 100:.2f}')
+        wb.log({"validation_accuracy": 100 * accuracy})
         wb.log({"train_loss": los})
-        wb.log({"validation_accuracy": val_acc})
+        # wb.log({"validation_accuracy": val_acc})
 
     def inference_model(self):
 
@@ -305,11 +326,12 @@ class EnteTransliterator:
         return self.model.encoder, self.model.decoder
 
     def __greedy_search(self, input_sequence, data):
+
         encoder, decoder = self.inference_model()
         with torch.no_grad():
             encoder_cell = None
             if isinstance(encoder.rnn, nn.GRU) or isinstance(encoder.rnn, nn.RNN):
-                encoder_hidden = self.encoder(input_sequence)
+                encoder_hidden = encoder(input_sequence)
 
             if isinstance(encoder.rnn, nn.LSTM):
                 encoder_hidden, encoder_cell = encoder(input_sequence)
@@ -326,7 +348,7 @@ class EnteTransliterator:
                     out, hidden, cell = decoder(sequence[:, -1], hidden, cell)
 
                 if isinstance(decoder.rnn, nn.GRU) or isinstance(decoder.rnn, nn.RNN):
-                    out = decoder(last_token, hidden)
+                    out, hidden = decoder(sequence[:, -1], hidden, None)
 
                 probabilities = torch.softmax(out, dim=-1)
                 _, top_token = torch.max(probabilities, dim=-1)
@@ -348,7 +370,7 @@ class EnteTransliterator:
 
             encoder_cell = None
             if isinstance(encoder.rnn, nn.GRU) or isinstance(encoder.rnn, nn.RNN):
-                encoder_hidden = self.encoder(inp)
+                encoder_hidden = encoder(inp)
 
             if isinstance(encoder.rnn, nn.LSTM):
                 encoder_hidden, encoder_cell = encoder(inp)
@@ -370,7 +392,7 @@ class EnteTransliterator:
                         out, hidden, cell = decoder(last_token, hidden, cell)
 
                     if isinstance(decoder.rnn, nn.GRU) or isinstance(decoder.rnn, nn.RNN):
-                        out, hidden = decoder(last_token, hidden)
+                        out, hidden = decoder(last_token, hidden, None)
 
                     log_probs = torch.log_softmax(out, dim = -1)
 
@@ -429,7 +451,7 @@ class EnteTransliterator:
 
         total = 0
         correct = 0
-        print("Starting test") #TODO
+        print("Starting test") 
         for i in range(len(data.source)):
 
             input_sequence, target_sequence = data.get_data_point(i, DEVICE)
@@ -442,18 +464,12 @@ class EnteTransliterator:
             )
             decoded_word = data.indices_to_word(decoded_tokens)
             target_word = data.indices_to_word(list(itertools.chain(*target_sequence.tolist()))) #TODO
-            # print(target_word)
-            out.write(target_word + " " + decoded_word + "\n")
+            # out.write(target_word + " " + decoded_word + "\n")
 
             total += 1
             if decoded_word == target_word:
                 correct += 1
 
-            if i % 100 == 0:
-                import datetime as time
-                print("Test in progress", time.datetime.now())
-
-            # break    #TODO
 
         accuracy = correct / total
         self.model.train()
@@ -466,21 +482,21 @@ class EnteTransliterator:
 #! TODO: attention
 #! TODO: Inference models
 
-print(f'Training from main using {DEVICE}')
-ente = EnteTransliterator(
-    cell_type="LSTM",
-    bidirectional=True,
-    batch_size=128,
-    dropout=0.3,
-    emb=150,
-    epochs=25,
-    hidden_size=1024,
-    lr=1e-3,
-    decoder_layers=2,
-    encoder_layers=2,
-    search_method='beam',
-    beam_width=3
-)
+# print(f'Training from main using {DEVICE}')
+# ente = EnteTransliterator(
+#     cell_type="LSTM",
+#     bidirectional=True,
+#     batch_size=32,
+#     dropout=0,
+#     emb=100,
+#     epochs=40,
+#     hidden_size=64,
+#     lr=1e-4,
+#     decoder_layers=3,
+#     encoder_layers=3,
+#     search_method='beam',
+#     beam_width=4
+# )
 
-ente.train()
-out.close()
+# ente.train()
+# out.close()

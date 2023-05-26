@@ -191,6 +191,9 @@ class Data:
         return input_data, target
 
     def sequence_to_text(self, sequence, source = False):
+
+        # print(len(self.source), self.rev_target_chars_index, "\n\n")
+        # print(len(self.rev_target_chars_index), self.rev_target_chars_index[70])
         if sequence.dim() == 0:
             sequence = sequence.unsqueeze(0)
         text = ""
